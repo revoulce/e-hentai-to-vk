@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/
+secrets/
+backups/
+.env
+deploy/.env
+*.sqlite*
+*.log
+coverage/
+.ehvk-test-*/

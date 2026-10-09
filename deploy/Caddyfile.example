@@ -1,0 +1,5 @@
+revoulce.ftp.sh {
+  handle /ehvk/* {
+    reverse_proxy app:3000
+  }
+}

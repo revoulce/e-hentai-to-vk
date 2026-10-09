@@ -1,0 +1,15 @@
+# Дополнение к compose.yaml после подготовки пользовательского токена.
+services:
+  app:
+    environment:
+      VK_GROUP_ID: ${VK_GROUP_ID:-quetzalcoatl_cosplay}
+      VK_TOKEN_FILE: /run/secrets/vk_token
+      VK_DONUT_REFERENCE_POST: ${VK_DONUT_REFERENCE_POST:-}
+      VK_DONUT_PERMANENT_CONFIRMED_POST: ${VK_DONUT_PERMANENT_CONFIRMED_POST:-}
+      VK_PHOTO_PRIVACY_VERIFIED: ${VK_PHOTO_PRIVACY_VERIFIED:-false}
+      VK_TIMEOUT_MS: ${VK_TIMEOUT_MS:-60000}
+    secrets:
+      - vk_token
+secrets:
+  vk_token:
+    file: ${VK_TOKEN_PATH:-../secrets/vk-token.txt}

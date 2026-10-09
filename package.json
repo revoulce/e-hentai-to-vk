@@ -1,0 +1,31 @@
+{
+  "name": "e-hentai-to-vk-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <27"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/main.ts",
+    "dev:local": "node --env-file-if-exists=.env --import tsx scripts/start-local.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "start": "node --env-file-if-exists=.env dist/src/main.js",
+    "vk:auth": "node scripts/vk-auth.mjs",
+    "vk:check": "node --env-file-if-exists=.env --import tsx src/vk-check.ts",
+    "backup": "tsx src/backup.ts"
+  },
+  "dependencies": {
+    "fastify": "5.12.5",
+    "sharp": "0.35.5",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
