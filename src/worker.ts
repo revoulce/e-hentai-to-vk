@@ -44,15 +44,28 @@ export class Worker {
     if (this.service.settings().paused || this.authBlocked) return;
     this.busy = true;
     try {
-      const rows = this.service.db.prepare(`SELECT j.id FROM jobs j
+      const retryBefore = new Date(this.service.now().getTime() - 60_000).toISOString();
+      const readPending = () => this.service.db.prepare(`SELECT j.id FROM jobs j
         WHERE (j.state = 'queued' OR (j.state IN ('retry_wait','partial') AND j.updated_at <= ?)) AND NOT EXISTS
         (SELECT 1 FROM posts p WHERE p.job_id = j.id AND p.state IN ('unknown','sending'))
         ORDER BY EXISTS (SELECT 1 FROM posts p WHERE p.job_id = j.id AND p.state IN ('posted','scheduled')) DESC,
-        j.confirmed_at, j.rowid`).all(new Date(this.service.now().getTime() - 60_000).toISOString());
-      if (!rows.length) return;
+        j.confirmed_at, j.rowid`).all(retryBefore);
+      const verification = this.service.db.prepare(`SELECT j.id FROM jobs j
+        WHERE j.state = 'needs_attention' AND j.updated_at <= ? AND EXISTS
+        (SELECT 1 FROM posts p WHERE p.job_id = j.id AND p.state = 'unknown'
+          AND p.post_id IS NOT NULL AND p.last_error = 'VK_POST_VERIFICATION_FAILED')
+        ORDER BY j.updated_at, j.confirmed_at, j.rowid LIMIT 100`).all(retryBefore);
+      if (!readPending().length && !verification.length) return;
       await this.publisher.check?.();
       if (!this.publisher.available()) return;
-      for (const row of rows) {
+      for (const row of verification) {
+        if (this.service.settings().paused || this.authBlocked || !this.publisher.available()) break;
+        const jobId = row.id as string;
+        // Only read the durable ID. A missing or mismatched result never permits recreation.
+        this.service.db.prepare('UPDATE jobs SET updated_at = ? WHERE id = ?').run(this.service.now().toISOString(), jobId);
+        await this.reconcileKnownPosts(jobId);
+      }
+      for (const row of readPending()) {
         if (this.service.settings().paused || this.authBlocked || !this.publisher.available()) break;
         const jobId = row.id as string;
         // Cancellation may happen while a previous pair is being uploaded.
@@ -73,6 +86,24 @@ export class Worker {
   private savePosted(post: PostRow, result: PublishResult) {
     this.service.db.prepare('UPDATE posts SET state = ?, post_id = ?, post_url = ?, last_error = NULL, last_error_details = NULL WHERE id = ?')
       .run(post.publish_at ? 'scheduled' : 'posted', result.postId, result.url, post.id);
+  }
+  private async reconcileKnownPosts(id: string) {
+    const snapshot = JSON.parse(this.service.jobRow(id).snapshot) as Snapshot;
+    for (const post of this.service.posts(id).filter(post => post.state === 'unknown'
+      && post.post_id && post.last_error === 'VK_POST_VERIFICATION_FAILED')) {
+      try {
+        const result = await this.publisher.reconcile(this.request(post, snapshot));
+        if (result.status === 'posted' && result.result.postId === post.post_id) this.savePosted(post, result.result);
+      } catch (error) {
+        if (error instanceof PublicationError && error.kind === 'authorization') this.authBlocked = true;
+        return;
+      }
+    }
+    const posts = this.service.posts(id);
+    if (posts.some(post => ['unknown','sending'].includes(post.state))) return;
+    const complete = posts.every(post => ['posted','scheduled'].includes(post.state));
+    this.service.db.prepare('UPDATE jobs SET state = ?, updated_at = ?, last_error = NULL WHERE id = ?')
+      .run(complete ? this.finishedState(id) : 'queued', this.service.now().toISOString(), id);
   }
   async reconcileJob(id: string) {
     if (this.busy) throw new AppError('WORKER_BUSY', 'Дождитесь завершения текущей операции.', 409, true);

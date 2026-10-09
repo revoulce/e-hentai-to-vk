@@ -129,6 +129,113 @@ test('a known VK post ID survives a failed readback and restart; reconciliation 
   assert.deepEqual(publisher.calls.map(call => call.role), ['public', 'donut']);
 });
 
+test('after restart all known verification failures resume Donut without recreating public posts or uploading photos again', async t => {
+  const publisher = new FakePublisher(); publisher.failRole = 'public';
+  publisher.failures = ['verification', 'verification', 'verification'];
+  const h = await setup(t, publisher);
+  const jobs = [];
+  for (const id of [991, 992, 993]) jobs.push((await queued(h, id)).job);
+  await h.runtime.worker.tick();
+  assert.ok(jobs.every(job => h.runtime.service.job(job.id).state === 'needs_attention'));
+  const originalTimes = jobs.map(job => h.runtime.service.posts(job.id)[0]!.publish_at);
+  assert.equal(publisher.uploads.length, 39);
+  await h.restart(); h.at('2026-10-08T05:01:00Z');
+  publisher.reconciliation = { status: 'posted', result: { postId: '-1_2', url: 'https://vk.com/wall-1_2' } };
+  await h.runtime.worker.tick();
+  assert.equal(publisher.reconciliations.length, 3);
+  assert.ok(publisher.reconciliations.every(request => request.role === 'public' && request.candidatePostId === '-1_2'));
+  assert.deepEqual(publisher.calls.map(request => request.role), ['public', 'public', 'public', 'donut', 'donut', 'donut']);
+  assert.equal(publisher.uploads.length, 39);
+  assert.ok(jobs.every(job => h.runtime.service.job(job.id).state === 'scheduled'));
+  assert.deepEqual(jobs.map(job => h.runtime.service.posts(job.id)[0]!.publish_at), originalTimes);
+  await h.runtime.worker.tick();
+  assert.equal(publisher.calls.length, 6); assert.equal(publisher.reconciliations.length, 3);
+});
+
+test('automatic verification is rate limited and never recreates an absent, mismatched or unverified known post', async t => {
+  const publisher = new FakePublisher(); publisher.failRole = 'public'; publisher.failures = ['verification'];
+  const h = await setup(t, publisher); const { job } = await queued(h, 994);
+  await h.runtime.worker.tick();
+  h.at('2026-10-08T04:59:30Z'); await h.runtime.worker.tick();
+  assert.equal(publisher.reconciliations.length, 0);
+  for (const [index, result] of ([
+    { status: 'unknown' }, { status: 'absent' },
+    { status: 'posted', result: { postId: '-1_999', url: 'https://vk.com/wall-1_999' } },
+  ] satisfies Reconciliation[]).entries()) {
+    publisher.reconciliation = result;
+    h.at(`2026-10-08T05:0${index}:00Z`); await h.runtime.worker.tick();
+    assert.equal(publisher.reconciliations.length, index + 1);
+    assert.equal(h.runtime.service.job(job.id).state, 'needs_attention');
+    assert.equal(h.runtime.service.posts(job.id)[0]!.state, 'unknown');
+    assert.equal(h.runtime.service.posts(job.id)[0]!.post_id, '-1_2');
+    assert.equal(publisher.calls.length, 1);
+    await h.runtime.worker.tick();
+    assert.equal(publisher.reconciliations.length, index + 1);
+  }
+  publisher.reconciliation = { status: 'posted', result: { postId: '-1_2', url: 'https://vk.com/wall-1_2' } };
+  h.at('2026-10-08T05:03:00Z'); await h.runtime.worker.tick();
+  assert.equal(h.runtime.service.job(job.id).state, 'scheduled');
+  assert.deepEqual(publisher.calls.map(request => request.role), ['public', 'donut']);
+});
+
+test('automatic verification preserves pause and authorization gates and leaves results without a known ID for manual reconciliation', async t => {
+  const publisher = new FakePublisher(); publisher.failRole = 'public'; publisher.failures = ['verification'];
+  const h = await setup(t, publisher); const { job } = await queued(h, 995);
+  await h.runtime.worker.tick(); h.at('2026-10-08T05:01:00Z');
+  publisher.reconciliation = { status: 'posted', result: { postId: '-1_2', url: 'https://vk.com/wall-1_2' } };
+  await h.request('POST', '/queue/pause'); await h.runtime.worker.tick();
+  assert.equal(publisher.reconciliations.length, 0);
+  await h.request('POST', '/queue/resume'); publisher.enabled = false;
+  await h.runtime.worker.tick(); assert.equal(publisher.reconciliations.length, 0);
+  publisher.enabled = true; h.runtime.worker.authBlocked = true;
+  await h.runtime.worker.tick(); assert.equal(publisher.reconciliations.length, 0);
+  h.runtime.worker.authBlocked = false;
+  h.runtime.service.db.prepare('UPDATE posts SET post_id = NULL WHERE job_id = ? AND role = ?').run(job.id, 'public');
+  await h.runtime.worker.tick(); assert.equal(publisher.reconciliations.length, 0);
+  h.runtime.service.db.prepare('UPDATE posts SET post_id = ?, last_error = ? WHERE job_id = ? AND role = ?')
+    .run('-1_2', 'RESULT_UNKNOWN', job.id, 'public');
+  await h.runtime.worker.tick(); assert.equal(publisher.reconciliations.length, 0);
+  assert.equal(h.runtime.service.job(job.id).state, 'needs_attention'); assert.equal(publisher.calls.length, 1);
+});
+
+test('authorization failure during automatic verification stops recovery and retains known IDs across restart', async t => {
+  const publisher = new FakePublisher(); publisher.failRole = 'public'; publisher.failures = ['verification', 'verification'];
+  const h = await setup(t, publisher);
+  const first = await queued(h, 996); const second = await queued(h, 997);
+  await h.runtime.worker.tick(); h.at('2026-10-08T05:01:00Z');
+  publisher.reconcile = async request => {
+    publisher.reconciliations.push(request); throw new PublicationError('authorization', 'VK_AUTH_REQUIRED');
+  };
+  await h.runtime.worker.tick();
+  assert.equal(publisher.reconciliations.length, 1); assert.equal(h.runtime.worker.authBlocked, true);
+  assert.equal(publisher.calls.length, 2);
+  await h.restart(); await h.runtime.worker.tick();
+  assert.equal(publisher.reconciliations.length, 1);
+  for (const { job } of [first, second]) {
+    assert.equal(h.runtime.service.job(job.id).state, 'needs_attention');
+    assert.equal(h.runtime.service.posts(job.id)[0]!.post_id, '-1_2');
+  }
+});
+
+test('one unreadable known post does not stop other verified pairs from resuming Donut', async t => {
+  const publisher = new FakePublisher(); publisher.failRole = 'public'; publisher.failures = ['verification', 'verification'];
+  const h = await setup(t, publisher);
+  const first = await queued(h, 998); const second = await queued(h, 999);
+  await h.runtime.worker.tick(); h.at('2026-10-08T05:01:00Z');
+  const firstOperation = h.runtime.service.posts(first.job.id)[0]!.operation_key;
+  publisher.reconcile = async request => {
+    publisher.reconciliations.push(request);
+    if (request.operationKey === firstOperation) throw new PublicationError('transient', 'VK_HTTP_ERROR');
+    return { status: 'posted', result: { postId: request.candidatePostId!, url: 'https://vk.com/wall-1_2' } };
+  };
+  await h.runtime.worker.tick();
+  assert.equal(h.runtime.service.job(first.job.id).state, 'needs_attention');
+  assert.equal(h.runtime.service.posts(first.job.id)[0]!.post_id, '-1_2');
+  assert.equal(h.runtime.service.job(second.job.id).state, 'scheduled');
+  assert.equal(h.runtime.worker.authBlocked, false);
+  assert.deepEqual(publisher.calls.map(request => request.role), ['public', 'public', 'donut']);
+});
+
 test('health is public; drafts, queue, files and unknown routes require the owner token', async t => {
   const h = await setup(t);
   assert.equal((await h.runtime.app.inject('/ehvk/health/live')).statusCode, 200);
