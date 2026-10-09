@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const ROLES = ['public', 'donut'] as const;
 export type Role = (typeof ROLES)[number];
+export const primaryAttachmentsModeSchema = z.enum(['carousel', 'grid']);
+export type PrimaryAttachmentsMode = z.infer<typeof primaryAttachmentsModeSchema>;
 export const DONUT_FOOTER = '⭐ Эксклюзивное продолжение для Донов.';
 export const API_PREFIX = '/ehvk/api/v1';
 
@@ -37,6 +39,7 @@ export const settingsPatchSchema = z.object({
   slots: z.array(z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)).min(1).max(24)
     .refine(v => new Set(v).size === v.length).optional(),
   includeModel: z.boolean().optional(),
+  primaryAttachmentsMode: primaryAttachmentsModeSchema.optional(),
 }).strict();
 
 export interface Settings {
@@ -44,6 +47,7 @@ export interface Settings {
   timezone: string;
   slots: string[];
   includeModel: boolean;
+  primaryAttachmentsMode: PrimaryAttachmentsMode;
   paused: boolean;
   gpSpendingAllowed: false;
   permanentDonut: true;
@@ -52,7 +56,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   version: 1, timezone: 'Europe/Minsk',
   slots: ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'],
-  includeModel: true, paused: false, gpSpendingAllowed: false, permanentDonut: true, vkAuthorizationBlocked: false,
+  includeModel: true, primaryAttachmentsMode: 'carousel', paused: false, gpSpendingAllowed: false, permanentDonut: true, vkAuthorizationBlocked: false,
 };
 
 export function normalizeHashtags(values: string[]): string[] {

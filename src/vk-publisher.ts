@@ -241,6 +241,7 @@ export class VkPublisher implements Publisher {
   }
   private validateRequest(request: PublishRequest, groupId: number) {
     if (!request.permanentDonut || !['public', 'donut'].includes(request.role) || !request.operationKey
+      || (request.primaryAttachmentsMode !== undefined && !['carousel', 'grid'].includes(request.primaryAttachmentsMode))
       || request.attachments.length !== (request.role === 'public' ? 4 : 9)
       || new Set(request.attachments).size !== request.attachments.length
       || request.attachments.some(value => !new RegExp(`^photo(?:-${groupId}|${this.uploaderId})_[1-9]\\d*(?:_[A-Za-z0-9_-]+)?$`).test(value)))
@@ -284,7 +285,8 @@ export class VkPublisher implements Publisher {
     if (request.publishAt !== undefined && request.publishAt <= Math.floor((this.options.now ?? Date.now)() / 1000))
       throw new PublicationError('transient', 'VK_SCHEDULE_EXPIRED');
     const params: Record<string, string | number> = { owner_id: -groupId, from_group: 1, signed: 0,
-      message: request.text, attachments: request.attachments.join(','), guid: request.operationKey };
+      message: request.text, attachments: request.attachments.join(','), guid: request.operationKey,
+      primary_attachments_mode: request.primaryAttachmentsMode ?? 'carousel' };
     if (request.role === 'donut') params.donut_paid_duration = -1;
     if (request.publishAt !== undefined) params.publish_date = request.publishAt;
     const created = await this.api('wall.post', params, z.object({ post_id: id }), true);

@@ -37,7 +37,7 @@ export class Store {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   settings(): Settings {
-    return JSON.parse(this.db.prepare('SELECT value FROM settings WHERE id = 1').get()!.value as string) as Settings;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(this.db.prepare('SELECT value FROM settings WHERE id = 1').get()!.value as string) } as Settings;
   }
   saveSettings(value: Settings): void {
     this.db.prepare('UPDATE settings SET value = ? WHERE id = 1').run(JSON.stringify(value));

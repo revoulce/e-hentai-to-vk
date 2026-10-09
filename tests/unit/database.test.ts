@@ -4,6 +4,22 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../../src/database.js';
+import { DEFAULT_SETTINGS } from '../../src/shared/contracts.js';
+
+test('legacy settings gain carousel without losing saved preferences and persist an explicit grid choice', async t => {
+  const directory = await mkdtemp(join(process.cwd(), '.ehvk-test-settings-'));
+  let store: Store | undefined;
+  t.after(async () => { store?.close(); await rm(directory, { recursive: true, force: true }); });
+  const path = join(directory, 'state.sqlite');
+  store = new Store(path);
+  const { primaryAttachmentsMode: _mode, ...legacy } = { ...DEFAULT_SETTINGS, version: 8, slots: ['12:00'], includeModel: false };
+  store.db.prepare('UPDATE settings SET value = ? WHERE id = 1').run(JSON.stringify(legacy));
+  store.close(); store = new Store(path);
+  assert.deepEqual(store.settings(), { ...legacy, primaryAttachmentsMode: 'carousel' });
+  store.saveSettings({ ...store.settings(), primaryAttachmentsMode: 'grid' });
+  store.close(); store = new Store(path);
+  assert.deepEqual(store.settings(), { ...legacy, primaryAttachmentsMode: 'grid' });
+});
 
 test('VK schedule migration preserves an existing job and all foreign key references', async t => {
   const directory = await mkdtemp(join(process.cwd(), '.ehvk-test-migration-'));

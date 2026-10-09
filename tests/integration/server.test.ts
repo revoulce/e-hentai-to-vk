@@ -217,6 +217,53 @@ test('concurrent confirmations produce one immutable job; keys cannot be reused 
   assert.equal((await h.request('POST', `/drafts/${next.id}/confirm`, { version: next.version }, { 'idempotency-key': 'concurrent-two' })).json().code, 'IDEMPOTENCY_CONFLICT');
 });
 
+test('attachment mode is validated, persisted and frozen for both posts across restart and retry', async t => {
+  const publisher = new FakePublisher(); publisher.failures = ['transient'];
+  const h = await setup(t, publisher);
+  const settings = (await h.request('GET', '/settings')).json();
+  assert.equal(settings.primaryAttachmentsMode, 'carousel');
+  for (const mode of ['invalid', '', null, 1]) {
+    assert.equal((await h.request('PATCH', '/settings', { version: settings.version, primaryAttachmentsMode: mode })).statusCode, 400);
+  }
+  const updated = await h.request('PATCH', '/settings', { version: settings.version, primaryAttachmentsMode: 'grid' });
+  assert.equal(updated.statusCode, 200, updated.body);
+  assert.equal(updated.json().version, settings.version + 1);
+  assert.equal(updated.json().primaryAttachmentsMode, 'grid');
+  assert.deepEqual(updated.json().slots, settings.slots);
+  const { draft, job } = await queued(h);
+  assert.equal(job.snapshot.primaryAttachmentsMode, 'grid');
+  await h.restart();
+  assert.equal((await h.request('GET', '/settings')).json().primaryAttachmentsMode, 'grid');
+  const changed = await h.request('PATCH', '/settings', { version: updated.json().version, primaryAttachmentsMode: 'carousel' });
+  assert.equal(changed.statusCode, 200, changed.body);
+  const repeated = await h.request('POST', `/drafts/${draft.id}/confirm`, { version: draft.version }, { 'idempotency-key': 'test-confirm-123' });
+  assert.equal(repeated.json().snapshot.primaryAttachmentsMode, 'grid');
+  await h.runtime.worker.tick();
+  assert.equal(h.runtime.service.job(job.id).state, 'partial');
+  await h.restart();
+  h.at('2026-10-08T07:00:00Z');
+  await h.runtime.worker.tick();
+  assert.equal(h.runtime.service.job(job.id).state, 'scheduled');
+  assert.deepEqual(publisher.calls.map(call => [call.role, call.primaryAttachmentsMode]),
+    [['public', 'grid'], ['donut', 'grid'], ['donut', 'grid']]);
+  const next = await queued(h, 124);
+  assert.equal(next.job.snapshot.primaryAttachmentsMode, 'carousel');
+});
+
+test('legacy snapshots retain carousel even after the global attachment mode changes', async t => {
+  const publisher = new FakePublisher();
+  const h = await setup(t, publisher);
+  const { job } = await queued(h);
+  const { primaryAttachmentsMode: _mode, ...legacy } = JSON.parse(h.runtime.service.jobRow(job.id).snapshot);
+  h.runtime.service.db.prepare('UPDATE jobs SET snapshot = ? WHERE id = ?').run(JSON.stringify(legacy), job.id);
+  const settings = (await h.request('GET', '/settings')).json();
+  await h.request('PATCH', '/settings', { version: settings.version, primaryAttachmentsMode: 'grid' });
+  await h.restart();
+  await h.runtime.worker.tick();
+  assert.equal(h.runtime.service.job(job.id).state, 'scheduled');
+  assert.deepEqual(publisher.calls.map(call => call.primaryAttachmentsMode), ['carousel', 'carousel']);
+});
+
 test('repeat gallery requires explicit approval again at confirmation; lost file cannot be confirmed', async t => {
   const h = await setup(t);
   await queued(h);

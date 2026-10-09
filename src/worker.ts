@@ -66,6 +66,7 @@ export class Worker {
   private request(post: PostRow, snapshot: Snapshot): PublishRequest {
     return { role: post.role, text: snapshot.texts[post.role], attachments: JSON.parse(post.attachments),
       operationKey: post.operation_key, permanentDonut: true,
+      primaryAttachmentsMode: snapshot.primaryAttachmentsMode ?? 'carousel',
       ...(post.publish_at ? { publishAt: Date.parse(post.publish_at) / 1000 } : {}),
       ...(post.post_id ? { candidatePostId: post.post_id } : {}) };
   }

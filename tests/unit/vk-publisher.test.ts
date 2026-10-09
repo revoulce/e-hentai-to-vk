@@ -196,8 +196,26 @@ test('publication preserves 4/9 attachments, community authorship, stable guid a
   for (const [i, role] of (['public', 'donut'] as const).entries()) {
     assert.equal(calls[i]!.get('owner_id'), '-55'); assert.equal(calls[i]!.get('from_group'), '1');
     assert.equal(calls[i]!.get('guid'), `stable-${role}`); assert.equal(calls[i]!.get('attachments'), request(role).attachments.join(','));
+    assert.equal(calls[i]!.get('primary_attachments_mode'), 'carousel');
   }
   await assert.rejects(h.publisher.publish({ ...request(), attachments: ['photo-99_1'] }), { kind: 'permanent' });
+});
+
+test('attachment display mode reaches wall.post for both audiences and scheduled posts', async t => {
+  const h = await setup(t); await h.publisher.check();
+  for (const mode of ['carousel', 'grid'] as const) for (const role of ['public', 'donut'] as const) {
+    for (const publishAt of [undefined, Date.parse('2026-10-08T15:00:00Z') / 1000]) {
+      await h.publisher.publish({ ...request(role), primaryAttachmentsMode: mode, publishAt });
+      const body = h.calls.filter(call => call.url.endsWith('wall.post')).at(-1)!.body as URLSearchParams;
+      assert.equal(body.get('primary_attachments_mode'), mode);
+      assert.equal(body.get('publish_date'), publishAt === undefined ? null : String(publishAt));
+      assert.equal(body.get('donut_paid_duration'), role === 'donut' ? '-1' : null);
+    }
+  }
+  const count = h.calls.length;
+  await assert.rejects(h.publisher.publish({ ...request(), primaryAttachmentsMode: 'invalid' } as unknown as PublishRequest),
+    { kind: 'permanent', code: 'VK_POST_REQUEST_INVALID' });
+  assert.equal(h.calls.length, count);
 });
 
 test('lost wall.post response, HTTP failures and malformed success become unknown; explicit rate limiting can retry', async t => {

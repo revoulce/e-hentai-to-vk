@@ -1,10 +1,11 @@
 import type { AssetRow } from './service.js';
-import type { Role } from './shared/contracts.js';
+import type { Role, PrimaryAttachmentsMode } from './shared/contracts.js';
 
 export interface PublishRequest {
   role: Role; text: string; attachments: string[]; operationKey: string; permanentDonut: true;
   candidatePostId?: string;
   publishAt?: number;
+  primaryAttachmentsMode?: PrimaryAttachmentsMode;
 }
 export interface PublishResult { postId: string; url: string }
 export interface PublicationDetails {

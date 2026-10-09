@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import {
   createDraftSchema, patchDraftSchema, confirmSchema, settingsPatchSchema, renderTexts, samplePages,
-  API_PREFIX, ROLES, type Role, type TextFields,
+  API_PREFIX, ROLES, type Role, type TextFields, type PrimaryAttachmentsMode,
 } from './shared/contracts.js';
 import type { Config } from './config.js';
 import { Store } from './database.js';
@@ -23,6 +23,7 @@ interface DraftRow {
 export interface Snapshot {
   gallery: GalleryRow; version: number; fields: TextFields; texts: Record<Role, string>;
   assets: AssetRow[]; permanentDonut: true;
+  primaryAttachmentsMode?: PrimaryAttachmentsMode;
 }
 interface GalleryRow { id: string; url: string; title: string; page_count: number; tags: string }
 export interface JobRow {
@@ -226,7 +227,8 @@ export class Service {
       const texts = renderTexts(JSON.parse(draft.fields) as TextFields);
       if (Object.values(texts).some(text => text.length > 4096)) fail('TEXT_TOO_LONG', 'Текст превышает внутренний лимит 4096 символов.');
       const snapshot: Snapshot = { gallery: this.gallery(draft.gallery_id), version: input.version,
-        fields: JSON.parse(draft.fields), texts, assets: this.assets(id), permanentDonut: true };
+        fields: JSON.parse(draft.fields), texts, assets: this.assets(id), permanentDonut: true,
+        primaryAttachmentsMode: this.settings().primaryAttachmentsMode };
       const jobId = randomUUID();
       const timestamp = this.now().toISOString();
       this.db.prepare('INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, NULL)')
